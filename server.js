@@ -461,7 +461,7 @@ function renderPublicAccess(data) {
     html += '<div class="ip-entry"><code>' + esc(ip) + '</code><button class="btn-sm danger" onclick="removeIp(' + i + ')">&times;</button></div>';
   });
   html += '</div>';
-  html += '<div class="ip-add-row"><input type="text" id="new-ip" placeholder="IP address (e.g. 203.0.113.42)" onkeydown="if(event.key===\'Enter\')addIp()"><button class="btn-sm primary" onclick="addIp()">Add</button></div>';
+  html += '<div class="ip-add-row"><input type="text" id="new-ip" placeholder="IP address (e.g. 203.0.113.42)" onkeydown="if(event.key===&#39;Enter&#39;)addIp()"><button class="btn-sm primary" onclick="addIp()">Add</button></div>';
   html += '</div>';
   return html;
 }
