@@ -3,6 +3,12 @@ services:
     build: .
     ports:
       - "8080:8080"
+    pid: "host"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - PM2_HOME=/pm2
     restart: unless-stopped
+    # To enable PM2 monitoring, mount the PM2 home directory:
+    # volumes:
+    #   - ~/.pm2:/pm2:ro
