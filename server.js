@@ -6,6 +6,36 @@ const PORT = process.env.PORT || 8080;
 const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const PM2_HOME = process.env.PM2_HOME || '';
 const DEPLOY_PROGRESS_FILE = process.env.DEPLOY_PROGRESS_FILE || '/tmp/deploy-progress.json';
+const PUBLIC_ACCESS_FILE = process.env.PUBLIC_ACCESS_FILE || '/host-tmp/public-access.json';
+
+function getPublicAccess() {
+  try {
+    const raw = fs.readFileSync(PUBLIC_ACCESS_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    return {
+      enabled: !!data.enabled,
+      allowedIps: Array.isArray(data.allowedIps) ? data.allowedIps : [],
+    };
+  } catch {
+    return { enabled: false, allowedIps: [] };
+  }
+}
+
+function setPublicAccess(data) {
+  const ipPattern = /^[0-9a-fA-F.:\/]+$/;
+  const allowedIps = (Array.isArray(data.allowedIps) ? data.allowedIps : [])
+    .filter((ip) => typeof ip === 'string' && ipPattern.test(ip));
+  const enabled = !!data.enabled && allowedIps.length > 0;
+  const state = {
+    enabled,
+    allowedIps,
+    updatedAt: Date.now(),
+  };
+  const tmp = PUBLIC_ACCESS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, PUBLIC_ACCESS_FILE);
+  return { enabled, allowedIps };
+}
 
 function queryDocker(path) {
   return new Promise((resolve, reject) => {
@@ -224,6 +254,60 @@ const HTML = `<!DOCTYPE html>
   @keyframes spin { to { transform: rotate(360deg); } }
   .step-label { flex: 1; }
   .step-duration { font-size: 0.7rem; color: #8b949e; font-family: inherit; }
+  /* Public Access */
+  .public-access-card {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem;
+    border-left: 3px solid #f85149;
+    transition: border-left-color 0.3s;
+  }
+  .public-access-card.enabled { border-left-color: #3fb950; }
+  .public-access-card .card-header { display: flex; justify-content: space-between; align-items: center; }
+  .switch { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background: #30363d; border-radius: 24px;
+    transition: background 0.3s;
+  }
+  .slider::before {
+    content: ''; position: absolute; height: 18px; width: 18px;
+    left: 3px; bottom: 3px; background: #c9d1d9; border-radius: 50%;
+    transition: transform 0.3s;
+  }
+  .switch input:checked + .slider { background: #238636; }
+  .switch input:checked + .slider::before { transform: translateX(20px); }
+  .ip-list { display: flex; flex-direction: column; gap: 0.4rem; }
+  .ip-entry {
+    display: flex; align-items: center; gap: 0.5rem;
+    font-size: 0.85rem; color: #c9d1d9;
+  }
+  .ip-entry code {
+    background: #0d1117; padding: 2px 8px; border-radius: 4px;
+    font-family: inherit; flex: 1;
+  }
+  .ip-add-row { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
+  .ip-add-row input {
+    flex: 1; background: #0d1117; border: 1px solid #30363d;
+    border-radius: 4px; padding: 4px 8px; color: #c9d1d9;
+    font-family: inherit; font-size: 0.85rem; outline: none;
+  }
+  .ip-add-row input:focus { border-color: #58a6ff; }
+  .btn-sm {
+    background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+    color: #c9d1d9; font-size: 0.75rem; padding: 3px 10px; cursor: pointer;
+    font-family: inherit;
+  }
+  .btn-sm:hover { background: #30363d; }
+  .btn-sm.primary { background: #238636; border-color: #2ea043; color: #fff; }
+  .btn-sm.primary:hover { background: #2ea043; }
+  .btn-sm.danger { color: #f85149; }
+  .btn-sm.danger:hover { background: #2d1216; }
+  .pa-hostname {
+    font-size: 0.8rem; color: #8b949e;
+  }
+  .pa-hostname a { color: #58a6ff; text-decoration: none; }
+  .pa-hostname a:hover { text-decoration: underline; }
   @media (max-width: 400px) {
     body { padding: 1rem; }
     .grid { grid-template-columns: 1fr; }
@@ -327,6 +411,19 @@ async function refresh() {
       content.appendChild(pm2Grid);
     }
 
+    // Public Access
+    if (data.publicAccess) {
+      var paLabel = document.createElement('div');
+      paLabel.className = 'section-label';
+      paLabel.textContent = 'Public Access';
+      content.appendChild(paLabel);
+      var paGrid = document.createElement('div');
+      paGrid.className = 'grid';
+      paGrid.id = 'pa-section';
+      paGrid.innerHTML = renderPublicAccess(data.publicAccess);
+      content.appendChild(paGrid);
+    }
+
     document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (err) {
     document.getElementById('content').innerHTML =
@@ -348,6 +445,64 @@ function fmtElapsed(startMs) {
   var min = Math.floor(sec / 60);
   return min + 'm ' + (sec % 60) + 's';
 }
+var paState = { enabled: false, allowedIps: [] };
+
+function renderPublicAccess(data) {
+  if (data) paState = { enabled: data.enabled, allowedIps: data.allowedIps.slice() };
+  var d = paState;
+  var html = '<div class="public-access-card ' + (d.enabled ? 'enabled' : '') + '">';
+  html += '<div class="card-header">';
+  html += '<div><span class="name">Public Access</span>';
+  html += '<div class="pa-hostname">' + (d.enabled ? '<a href="https://docs.prosnow.cc" target="_blank">docs.prosnow.cc</a>' : 'docs.prosnow.cc') + '</div></div>';
+  html += '<label class="switch"><input type="checkbox" ' + (d.enabled ? 'checked' : '') + ' onchange="togglePublicAccess(this.checked)"><span class="slider"></span></label>';
+  html += '</div>';
+  html += '<div class="ip-list">';
+  d.allowedIps.forEach(function(ip, i) {
+    html += '<div class="ip-entry"><code>' + esc(ip) + '</code><button class="btn-sm danger" onclick="removeIp(' + i + ')">&times;</button></div>';
+  });
+  html += '</div>';
+  html += '<div class="ip-add-row"><input type="text" id="new-ip" placeholder="IP address (e.g. 203.0.113.42)" onkeydown="if(event.key===\'Enter\')addIp()"><button class="btn-sm primary" onclick="addIp()">Add</button></div>';
+  html += '</div>';
+  return html;
+}
+
+function savePublicAccess() {
+  renderPublicAccessInPlace();
+  fetch('api/public-access', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: paState.enabled, allowedIps: paState.allowedIps }),
+  }).then(function(res) { return res.json(); }).then(function(data) {
+    paState.enabled = data.enabled;
+    paState.allowedIps = data.allowedIps;
+    renderPublicAccessInPlace();
+  }).catch(function() {});
+}
+
+function renderPublicAccessInPlace() {
+  var el = document.getElementById('pa-section');
+  if (el) el.innerHTML = renderPublicAccess(null);
+}
+
+function togglePublicAccess(enabled) {
+  paState.enabled = enabled;
+  savePublicAccess();
+}
+
+function addIp() {
+  var input = document.getElementById('new-ip');
+  var ip = input.value.trim();
+  if (!ip || !/^[0-9a-fA-F.:\/]+$/.test(ip)) return;
+  if (paState.allowedIps.indexOf(ip) !== -1) return;
+  paState.allowedIps.push(ip);
+  savePublicAccess();
+}
+
+function removeIp(index) {
+  paState.allowedIps.splice(index, 1);
+  savePublicAccess();
+}
+
 refresh();
 setInterval(refresh, 5000);
 </script>
@@ -377,8 +532,42 @@ const server = http.createServer(async (req, res) => {
         if (webhook) webhook.deployProgress = progress;
       }
     }
+    result.publicAccess = getPublicAccess();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/api/public-access') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(getPublicAccess()));
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/public-access') {
+    let body = '';
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > 10240) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Payload too large' }));
+        req.destroy();
+        return;
+      }
+      body += chunk;
+    });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const result = setPublicAccess(data);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
     return;
   }
 

@@ -6,10 +6,11 @@ services:
     pid: "host"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /tmp:/host-tmp:ro
+      - /tmp:/host-tmp
     environment:
       - PM2_HOME=/pm2
       - DEPLOY_PROGRESS_FILE=/host-tmp/deploy-progress.json
+      - PUBLIC_ACCESS_FILE=/host-tmp/public-access.json
     restart: unless-stopped
     # To enable PM2 monitoring, mount the PM2 home directory:
     # volumes:
