@@ -5,6 +5,7 @@ const path = require('path');
 const PORT = process.env.PORT || 8080;
 const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const PM2_HOME = process.env.PM2_HOME || '';
+const DEPLOY_PROGRESS_FILE = process.env.DEPLOY_PROGRESS_FILE || '/tmp/deploy-progress.json';
 
 function queryDocker(path) {
   return new Promise((resolve, reject) => {
@@ -110,6 +111,17 @@ function getPm2Processes() {
   }
 }
 
+function getDeployProgress() {
+  try {
+    const raw = fs.readFileSync(DEPLOY_PROGRESS_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    if (typeof data.deploying !== 'boolean' || !Array.isArray(data.steps)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 function formatUptime(startMs) {
   const seconds = Math.floor((Date.now() - startMs) / 1000);
   if (seconds < 60) return `${seconds}s`;
@@ -154,11 +166,13 @@ const HTML = `<!DOCTYPE html>
     background: #161b22; border: 1px solid #30363d; border-radius: 8px;
     padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem;
     border-left: 3px solid #30363d;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    max-height: 200px; overflow: hidden;
   }
   .card.running, .card.online { border-left-color: #3fb950; }
   .card.exited, .card.stopped  { border-left-color: #f85149; }
   .card.restarting, .card.created { border-left-color: #d29922; }
-  .card.active { border-left-color: #1f6feb; }
+  .card.active { border-left-color: #1f6feb; max-height: 600px; }
   .card-header { display: flex; justify-content: space-between; align-items: center; }
   .name { font-weight: 600; color: #e6edf3; font-size: 0.95rem; }
   .badge {
@@ -177,6 +191,40 @@ const HTML = `<!DOCTYPE html>
     background: #2d1216; border: 1px solid #f8514966; border-radius: 8px;
     padding: 1rem; color: #f85149; text-align: center;
   }
+  .deploy-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-top: 0.5rem; border-top: 1px solid #30363d;
+    font-size: 0.75rem; font-weight: 600; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .deploy-header .elapsed { font-weight: 400; font-size: 0.7rem; color: #58a6ff; text-transform: none; letter-spacing: 0; }
+  .deploy-steps {
+    display: flex; flex-direction: column; gap: 0.35rem;
+  }
+  .deploy-step {
+    display: flex; align-items: center; gap: 0.5rem;
+    font-size: 0.8rem; color: #c9d1d9;
+  }
+  .deploy-step.pending { opacity: 0.35; }
+  .deploy-step.running { opacity: 1; }
+  .deploy-step.done { color: #3fb950; opacity: 0.7; }
+  .deploy-step.failed { color: #f85149; opacity: 1; }
+  .step-icon {
+    width: 16px; height: 16px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; font-size: 10px; line-height: 1;
+  }
+  .step-icon.pending { border: 1.5px solid #484f58; }
+  .step-icon.running {
+    border: 2px solid transparent;
+    border-top-color: #58a6ff; border-right-color: #58a6ff;
+    animation: spin 0.8s linear infinite;
+  }
+  .step-icon.done { border: none; color: #3fb950; font-size: 12px; }
+  .step-icon.failed { border: none; color: #f85149; font-size: 12px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .step-label { flex: 1; }
+  .step-duration { font-size: 0.7rem; color: #8b949e; font-family: inherit; }
   @media (max-width: 400px) {
     body { padding: 1rem; }
     .grid { grid-template-columns: 1fr; }
@@ -239,17 +287,42 @@ async function refresh() {
         pm2Grid.innerHTML = '<p class="meta">No PM2 processes found.</p>';
       }
       data.pm2.forEach(function(p) {
-        var state = p.state.toLowerCase();
+        var dp = p.deployProgress;
+        var showDeploy = dp && (dp.deploying || (dp.finishedAt && Date.now() - dp.finishedAt < 15000));
+        var state = (showDeploy && p.state === 'active') ? 'active' : p.state.toLowerCase();
+        var badgeText = (showDeploy && state === 'active') ? 'deploying' : p.state;
         var card = document.createElement('div');
         card.className = 'card ' + state;
-        card.innerHTML =
+        var html =
           '<div class="card-header">' +
             '<span class="name">' + esc(p.name) + '</span>' +
-            '<span class="badge ' + state + '">' + esc(p.state) + '</span>' +
+            '<span class="badge ' + state + '">' + esc(badgeText) + '</span>' +
           '</div>' +
           '<div class="row"><span class="label">Script</span><span class="value">' + esc(p.script) + '</span></div>' +
           (p.pid ? '<div class="row"><span class="label">PID</span><span class="value">' + esc(String(p.pid)) + '</span></div>' : '') +
           (p.uptime ? '<div class="row"><span class="label">Uptime</span><span class="value">' + esc(p.uptime) + '</span></div>' : '');
+        if (showDeploy) {
+          var elapsed = dp.startedAt ? fmtElapsed(dp.startedAt) : '';
+          html += '<div class="deploy-header"><span>Deploy Progress</span><span class="elapsed">' + esc(elapsed) + '</span></div>';
+          html += '<div class="deploy-steps">';
+          dp.steps.forEach(function(s) {
+            var icon = '';
+            if (s.status === 'done') icon = '\\u2713';
+            else if (s.status === 'failed') icon = '\\u2717';
+            else if (s.status === 'running') icon = '';
+            else icon = '';
+            var dur = '';
+            if (s.status === 'done' && s.startedAt && s.doneAt) dur = fmtMs(s.doneAt - s.startedAt);
+            else if (s.status === 'running' && s.startedAt) dur = fmtElapsed(s.startedAt);
+            html += '<div class="deploy-step ' + esc(s.status) + '">' +
+              '<span class="step-icon ' + esc(s.status) + '">' + icon + '</span>' +
+              '<span class="step-label">' + esc(s.label) + '</span>' +
+              (dur ? '<span class="step-duration">' + esc(dur) + '</span>' : '') +
+              '</div>';
+          });
+          html += '</div>';
+        }
+        card.innerHTML = html;
         pm2Grid.appendChild(card);
       });
       content.appendChild(pm2Grid);
@@ -265,6 +338,16 @@ function esc(s) {
   var d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+function fmtMs(ms) {
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
+}
+function fmtElapsed(startMs) {
+  var sec = Math.floor((Date.now() - startMs) / 1000);
+  if (sec < 60) return sec + 's';
+  var min = Math.floor(sec / 60);
+  return min + 'm ' + (sec % 60) + 's';
 }
 refresh();
 setInterval(refresh, 5000);
@@ -288,6 +371,13 @@ const server = http.createServer(async (req, res) => {
       result.dockerError = err.message;
     }
     result.pm2 = getPm2Processes();
+    if (result.pm2) {
+      const progress = getDeployProgress();
+      if (progress) {
+        const webhook = result.pm2.find((p) => p.name === 'deploy-webhook');
+        if (webhook) webhook.deployProgress = progress;
+      }
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));
     return;
