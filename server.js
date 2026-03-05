@@ -167,12 +167,11 @@ const HTML = `<!DOCTYPE html>
     padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem;
     border-left: 3px solid #30363d;
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    max-height: 200px; overflow: hidden;
   }
   .card.running, .card.online { border-left-color: #3fb950; }
   .card.exited, .card.stopped  { border-left-color: #f85149; }
   .card.restarting, .card.created { border-left-color: #d29922; }
-  .card.active { border-left-color: #1f6feb; max-height: 600px; }
+  .card.active { border-left-color: #1f6feb; grid-column: 1 / -1; }
   .card-header { display: flex; justify-content: space-between; align-items: center; }
   .name { font-weight: 600; color: #e6edf3; font-size: 0.95rem; }
   .badge {
