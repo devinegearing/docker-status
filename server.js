@@ -107,7 +107,7 @@ const HTML = `<!DOCTYPE html>
 <script>
 async function refresh() {
   try {
-    const res = await fetch('/api/containers');
+    const res = await fetch('api/containers');
     if (!res.ok) throw new Error(res.statusText);
     const containers = await res.json();
     const grid = document.createElement('div');
