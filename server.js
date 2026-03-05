@@ -75,10 +75,31 @@ function getPm2Processes() {
 
       const uptime = proc.pm_uptime || proc.env?.pm_uptime;
 
+      // Check if process has child processes (i.e. actively running a task)
+      let active = false;
+      if (online && pid) {
+        try {
+          const children = fs.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8').trim();
+          active = children.length > 0;
+        } catch {
+          // /proc/.../children may not exist on all kernels; fall back to scanning
+          try {
+            const procs = fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d));
+            for (const p of procs) {
+              try {
+                const stat = fs.readFileSync(`/proc/${p}/stat`, 'utf8');
+                const ppid = parseInt(stat.split(') ')[1]?.split(' ')[1], 10);
+                if (ppid === pid) { active = true; break; }
+              } catch {}
+            }
+          } catch {}
+        }
+      }
+
       return {
         name,
         pid: online ? pid : null,
-        state: online ? 'online' : 'stopped',
+        state: online ? (active ? 'active' : 'online') : 'stopped',
         interpreter: proc.exec_interpreter || 'node',
         script: path.basename(proc.pm_exec_path || ''),
         uptime: online && uptime ? formatUptime(uptime) : null,
@@ -137,6 +158,7 @@ const HTML = `<!DOCTYPE html>
   .card.running, .card.online { border-left-color: #3fb950; }
   .card.exited, .card.stopped  { border-left-color: #f85149; }
   .card.restarting, .card.created { border-left-color: #d29922; }
+  .card.active { border-left-color: #1f6feb; }
   .card-header { display: flex; justify-content: space-between; align-items: center; }
   .name { font-weight: 600; color: #e6edf3; font-size: 0.95rem; }
   .badge {
@@ -146,6 +168,7 @@ const HTML = `<!DOCTYPE html>
   .badge.running, .badge.online { background: #0f2d1a; color: #3fb950; }
   .badge.exited, .badge.stopped { background: #2d1216; color: #f85149; }
   .badge.restarting { background: #2d2210; color: #d29922; }
+  .badge.active { background: #0d1d3a; color: #1f6feb; }
   .badge.created    { background: #2d2210; color: #d29922; }
   .row { display: flex; gap: 0.5rem; font-size: 0.8rem; }
   .label { color: #8b949e; min-width: 50px; }
